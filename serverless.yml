@@ -1,0 +1,93 @@
+service: service
+frameworkVersion: '3'
+variablesResolutionMode: 20210326
+configValidationMode: warn
+
+custom:
+  stage: ${opt:stage, self:provider.stage}
+  bucket_name: "service-${self:custom.stage}"
+  mysql_db_username: ${ssm:/db/username}
+  mysql_db_password: ${ssm:/db/password}
+  mysql_db_name: ${ssm:/db/name}
+  mysql_db_host: ${ssm:/db/host}
+  mysql_db_port: ${ssm:/db/port}
+  default: &default
+    subnetA: subnet-xxxxxxxx
+    subnetB: subnet-xxxxxxxx
+    securityGroup: sg-xxxxxxxxxx
+  my_stage:
+    <<: *default
+
+  apiKeys:
+    - name: service
+      usagePlan:
+        name: "service"
+        quota:
+          limit: 30000
+          period: DAY
+        throttle:
+          burstLimit: 100
+          rateLimit: 50
+
+provider:
+  name: aws
+  runtime: python3.12
+  memorySize: 128
+  vpc:
+    securityGroupIds:
+      - ${self:custom.${self:custom.stage}.securityGroup}
+    subnetIds:
+      - ${self:custom.${self:custom.stage}.subnetA}
+      - ${self:custom.${self:custom.stage}.subnetB}
+  environment:
+    STAGE: ${self:custom.stage}
+    MYSQL_DB_USERNAME: ${self:custom.mysql_db_username}
+    MYSQL_DB_PASSWORD: ${self:custom.mysql_db_password}
+    MYSQL_DB_NAME: ${self:custom.mysql_db_name}
+    MYSQL_DB_HOST: ${self:custom.mysql_db_host}
+    MYSQL_DB_PORT: ${self:custom.mysql_db_port}
+    BUCKET_NAME: ${self:custom.bucket_name}
+    REGION_NAME: us-east-1
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:*
+          Resource:
+            - "arn:aws:s3:::${self:custom.bucket_name}/*"
+
+resources:
+  Resources:
+    ServiceBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucket_name}
+
+functions:
+  entry_point:
+    handler: src/handler.lambda_handler
+    timeout: 30
+    events:
+      - http:
+          path: /{proxy+}
+          method: any
+          private: true
+      - schedule:
+          rate: rate(5 minutes)
+          input:
+            path: '/v1/ping'
+            httpMethod: "GET"
+
+package:
+  exclude:
+    - 'cmd/**'
+    - 'node_modules/**'
+    - 'cmd/__pycache__/**'
+    - 'src/__pycache__/**'
+    - 'venv/**'
+
+
+plugins:
+  - serverless-add-api-key
+  - serverless-python-requirements
